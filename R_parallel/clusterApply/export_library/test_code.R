@@ -1,0 +1,41 @@
+# This codes is experiment on the clusterExport function. It seems the first argument don't have
+# to be exported
+
+
+library(parallel)
+
+# create some data
+n =10 
+myvec = seq(1,n,1)
+mydivisor = 2
+
+
+# make a cluster
+cls <- makePSOCKcluster(rep("localhost",2))
+
+
+# split the input data (a vector) to n parts (n is the nubmer of clusters) and count ones in each part.
+# each part is indexed by an index vector
+par_search = function(cls,data,divisor) {
+  
+    rowgrps <- splitIndices(length(data), length(cls))
+      
+    grpsearch  <- function(grp) {
+      data = data/divisor
+      return(sum(rollmeanr(data[grp],2)))
+    }  
+    mout <- clusterApply(cls, rowgrps, grpsearch)
+    Reduce(c, mout)
+}
+
+
+
+# make the user-defined function and the variables visible.
+clusterExport(cls,c('mydivisor'))
+clusterExport(cls,library("zoo"),envir = environment(parallel))
+
+library(zoo)
+
+par_search(cls,myvec,mydivisor)
+
+
