@@ -1,8 +1,18 @@
 library(Rcpp)
-sourceCpp("rollmean.cpp")
-rollmean(seq(1,10,1),2)
+sourceCpp("rollmean_s.cpp")
+
+sourceCpp("rollmean_p.cpp")
+
+x = seq(1,10000000,1)
 
 start = proc.time()  
-res = rollmean(seq(1,10000000,1),2)
+res = rollmean_serial(x,2)
+
+
+proc.time() - start
+
+start = proc.time()  
+res = rollmean_parallel(x,2)
+
 
 proc.time() - start

@@ -5,11 +5,10 @@ using namespace Rcpp;
 
 //[[Rcpp::plugins(openmp)]]
 //[[Rcpp::export]]
-NumericVector rollmean(NumericVector v, int k) {
+NumericVector rollmean_serial(NumericVector v, int k) {
     int n = v.size();
 	NumericVector means(n-k+1);
     int i, j;
-    #pragma omp parallel for
 	for (i=0; i < n-k+1; i++) {
 			means[i] = v[i];
 			for (j=1; j<k; j++) {
