@@ -1,3 +1,6 @@
+#include <R.h>
+#include <Rinternals.h>
+
 SEXP vecSum (SEXP Rvec) {
    int i, n;
    double *vec, value = 0;

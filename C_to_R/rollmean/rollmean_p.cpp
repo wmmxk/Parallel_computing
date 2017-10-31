@@ -6,6 +6,7 @@ using namespace Rcpp;
 //[[Rcpp::plugins(openmp)]]
 //[[Rcpp::export]]
 NumericVector rollmean_parallel(NumericVector v, int k) {
+// k is the window sie
     int n = v.size();
 	NumericVector means(n-k+1);
     int i, j;
