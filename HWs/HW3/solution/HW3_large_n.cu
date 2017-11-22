@@ -4,7 +4,6 @@
 
 __global__ void parallel_max_each_chunk(float *dmaxarr, float * darr,  int n, int k);
 
-
 int main(int argc, char **argv) {
 				int n = atoi(argv[1]);
 				int k = atoi(argv[2]); 
@@ -39,7 +38,7 @@ int main(int argc, char **argv) {
   //truth
 				float *smaxarr = (float *)malloc(numChunk*sizeof(float));
 				for (i = 0; i < numChunk; i ++) {
-        smaxarr[i] = i*numthreadsBlock + k/2 <=n? arr[i*numthreadsBlock + k/2 ]:0; // k is an odd number
+        smaxarr[i] = (i)*numthreadsBlock +k  <=n? arr[i*numthreadsBlock + k/2 ]:0; // k is an odd number
 				}
 
 		//check the results

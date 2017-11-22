@@ -16,7 +16,7 @@ int main(int argc, char **argv) {
 							arr[n-i] = (float)i;			
 				}
 
-		const int numthreadsBlock = 512;
+		const int numthreadsBlock = 1024;
 		int numChunk;
 		numChunk = ( n + numthreadsBlock - 1)/numthreadsBlock;
 		float *maxarr = (float *)malloc(numChunk * sizeof(float));
