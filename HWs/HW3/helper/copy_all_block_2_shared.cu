@@ -4,7 +4,9 @@
 	  finally each block return a sum of maximum.		
 	
   parallel_max_each_chunk<<<dimGrid,dimBlock,(n+numthreadsBlock)*sizeof(float)>>>(dmaxarr, darr, n);
-     It seems you can request less memory
+ how to run:
+	   ./a.out n num_blocks
+		It seems you can request less memory
 	*/
 #include <stdio.h>
 #include <cuda.h>
