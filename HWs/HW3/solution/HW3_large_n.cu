@@ -1,4 +1,4 @@
-// n should be less than 10000 when k==3
+// when testing the code, k should be an odd number because k is assumed to be odd when computing the truth
 #include <stdio.h>
 #include <cuda.h>
 
@@ -16,36 +16,36 @@ int main(int argc, char **argv) {
 							arr[n-i] = (float)i;			
 				}
 
-		const int numthreadsBlock = 8;
-		int numChunk = ( n + numthreadsBlock - 1)/numthreadsBlock;
-
+		const int numthreadsBlock = 1024;
+		int numChunk;
+		numChunk = ( n + numthreadsBlock - 1)/numthreadsBlock;
 		float *maxarr = (float *)malloc(numChunk * sizeof(float));
 
-		// declare GPU memory pointers
-				float *darr, * dmaxarr;
-				cudaMalloc((void **)&darr, n*sizeof(float));
-				cudaMalloc((void **)&dmaxarr, numChunk*sizeof(float));
-				cudaMemcpy(darr, arr, n*sizeof(float), cudaMemcpyHostToDevice);
+  int numBlock = numChunk;
 
-		dim3 dimGrid(numChunk,1);
+		// declare GPU memory pointers
+		float *darr, * dmaxarr;
+		cudaMalloc((void **)&darr, n*sizeof(float));
+		cudaMalloc((void **)&dmaxarr, numChunk*sizeof(float));
+		cudaMemcpy(darr, arr, n*sizeof(float), cudaMemcpyHostToDevice);
+
+		dim3 dimGrid(numBlock,1);
 		dim3 dimBlock(numthreadsBlock,1,1);
 
-		parallel_max_each_chunk<<<dimGrid,dimBlock,(n+3*numthreadsBlock)*sizeof(float)>>>(dmaxarr, darr, n, k);
+		parallel_max_each_chunk<<<dimGrid,dimBlock,(3*numthreadsBlock)*sizeof(float)>>>(dmaxarr, darr, n, k);
 		cudaThreadSynchronize();
 		cudaMemcpy(maxarr, dmaxarr, numChunk*sizeof(float), cudaMemcpyDeviceToHost);
-
 
   //truth
 				float *smaxarr = (float *)malloc(numChunk*sizeof(float));
 				for (i = 0; i < numChunk; i ++) {
-        smaxarr[i] = i*numthreadsBlock + 1<=n? arr[i*numthreadsBlock + 1]:0;
+        smaxarr[i] = i*numthreadsBlock + k/2 <=n? arr[i*numthreadsBlock + k/2 ]:0; // k is an odd number
 				}
-
 
 		//check the results
 				bool judge = true;
-				for (i=0; i < numChunk; i++) {
-						printf("max of block  %d,  %f\n ", i, smaxarr[i]);
+				for (i=0; i < numBlock; i++) {
+						printf("max of block  %d,  %f %f\n ", i, smaxarr[i], maxarr[i]);
 						judge = judge && (smaxarr[i] == maxarr[i]);
 				}
 				printf("\n--------correct or wrong---------\n");
@@ -64,20 +64,15 @@ int main(int argc, char **argv) {
 		if (error !=cudaSuccess) {
 				printf("CUDA error: %s\n", cudaGetErrorString(error));
 		}
+
+		//free gpu memory
+		cudaFree(dmaxarr);
+		cudaFree(darr);
 		return 0;
 }
 
 __global__ void parallel_max_each_chunk(float *dmaxarr, float * darr, int n,int k) {
  	int i, tid = threadIdx.x;
-		//copy the whole series to shared memory
-  //always round up and if n is a multiple of blockDim.x no rounding
-		int chunkSize = (n+blockDim.x-1)/blockDim.x;
-  extern __shared__ float sdata[];
-  for (i = 0; i < chunkSize; i++) {
-			  if (tid * chunkSize + i <n)
-     sdata[tid*chunkSize + i ] = darr[tid*chunkSize + i];
-			}
-  __syncthreads();
 
   // declare three array for the maximum found by each thread 
   extern __shared__ float mymaxvals[];
@@ -95,12 +90,12 @@ __global__ void parallel_max_each_chunk(float *dmaxarr, float * darr, int n,int 
       if (perlen ==k) {
 							  xbar = 0;
 									for ( i = perstart; i <= perend; i++) {
-           xbar += sdata[i];     
+           xbar += darr[i];     
 									}
 									xbar /= (perend - perstart + 1);
 									mymaxvals[tid] = xbar;
 						} else {
-        xbar = ( (perlen-1) * xbar + sdata[perend] ) / perlen;
+        xbar = ( (perlen-1) * xbar + darr[perend] ) / perlen;
 						}
 						//update the mymaxvals[tid] if the next longer subsequence has a higher mean
 						if (xbar > mymaxvals[tid]) {
@@ -112,7 +107,6 @@ __global__ void parallel_max_each_chunk(float *dmaxarr, float * darr, int n,int 
 		} else {
     mymaxvals[tid] = 0;//initialize it the smallest number
 		}
-//  mymaxvals[tid] = sdata[tid]; 
 		__syncthreads(); //sync to make sure each thread in this block has done with the for loop
 
   // get the highest among the mymaxvals using reduce
