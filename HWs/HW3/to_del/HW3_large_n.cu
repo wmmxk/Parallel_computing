@@ -1,8 +1,10 @@
-// when testing the code, k should be an odd number because k is assumed to be odd when computing the truth
+// n should be less than 10000 when k==3
 #include <stdio.h>
 #include <cuda.h>
 
-__global__ void parallel_max_each_chunk(float *dmaxarr, float * darr,  int n, int k);
+__global__ void parallel_max_each_chunk(float *dmaxarr, int *dmaxstart, int *dmaxend,float * darr,  int n, int k);
+
+void check(int n, int numBlock, float *smaxarr, float *maxarr, float *arr);
 
 int main(int argc, char **argv) {
 				int n = atoi(argv[1]);
@@ -15,49 +17,44 @@ int main(int argc, char **argv) {
 							arr[n-i] = (float)i;			
 				}
 
-		const int numthreadsBlock = 1024;
+		const int numthreadsBlock = 512;
 		int numChunk;
 		numChunk = ( n + numthreadsBlock - 1)/numthreadsBlock;
 		float *maxarr = (float *)malloc(numChunk * sizeof(float));
-
-  int numBlock = numChunk;
+  int *maxstart = (int *)malloc(numChunk * sizeof(int));
+  int *maxend = (int *)malloc(numChunk * sizeof(int));
+  
+		int numBlock = numChunk;
 
 		// declare GPU memory pointers
 		float *darr, * dmaxarr;
+  int *dmaxstart, *dmaxend;
+
 		cudaMalloc((void **)&darr, n*sizeof(float));
 		cudaMalloc((void **)&dmaxarr, numChunk*sizeof(float));
+		cudaMalloc((void **)&dmaxstart, numChunk*sizeof(int));
+		cudaMalloc((void **)&dmaxend, numChunk*sizeof(int));
+
 		cudaMemcpy(darr, arr, n*sizeof(float), cudaMemcpyHostToDevice);
 
 		dim3 dimGrid(numBlock,1);
 		dim3 dimBlock(numthreadsBlock,1,1);
 
-		parallel_max_each_chunk<<<dimGrid,dimBlock,(3*numthreadsBlock)*sizeof(float)>>>(dmaxarr, darr, n, k);
+		parallel_max_each_chunk<<<dimGrid,dimBlock,(3*numthreadsBlock)*sizeof(float)>>>(dmaxarr,dmaxstart,dmaxend, darr, n, k);
 		cudaThreadSynchronize();
 		cudaMemcpy(maxarr, dmaxarr, numChunk*sizeof(float), cudaMemcpyDeviceToHost);
-
-  //truth
+		cudaMemcpy(maxstart, dmaxstart, numChunk*sizeof(int), cudaMemcpyDeviceToHost);
+		cudaMemcpy(maxend, dmaxend, numChunk*sizeof(int), cudaMemcpyDeviceToHost);
+		
+		//truth
 				float *smaxarr = (float *)malloc(numChunk*sizeof(float));
 				for (i = 0; i < numChunk; i ++) {
-        smaxarr[i] = (i)*numthreadsBlock +k  <=n? arr[i*numthreadsBlock + k/2 ]:0; // k is an odd number
+        smaxarr[i] = i*numthreadsBlock + k <=n? arr[i*numthreadsBlock + k/2 ]:0; // k is an odd number
 				}
+  // compare the truth with results by kernel
+   check(n,numBlock, smaxarr, maxarr,arr);
 
-		//check the results
-				bool judge = true;
-				for (i=0; i < numBlock; i++) {
-						printf("max of block  %d,  %f %f\n ", i, smaxarr[i], maxarr[i]);
-						judge = judge && (smaxarr[i] == maxarr[i]);
-				}
-				printf("\n--------correct or wrong---------\n");
-				printf(judge ? "right\n": "wrong\n");
-
-				// This is for developing: print out the 1d array
-
-				printf("\n--------1d array---------\n");
-    if ( n < 15) {
-				for (i=0; i < n; i++) {
-						printf("element  %d,  %f\n ", i, arr[i]);
-				}
-    }
+		printf("max start %d, %d\n", maxstart[0], maxend[0]);
 		// check the exit state of CUDA code
 		cudaError_t error = cudaGetLastError();
 		if (error !=cudaSuccess) {
@@ -70,13 +67,11 @@ int main(int argc, char **argv) {
 		return 0;
 }
 
-__global__ void parallel_max_each_chunk(float *dmaxarr, float * darr, int n,int k) {
+__global__ void parallel_max_each_chunk(float *dmaxarr,int *dmaxstart, int *dmaxend, float * darr, int n,int k) {
  	int i, tid = threadIdx.x;
-
-  // declare three array for the maximum found by each thread 
   extern __shared__ float mymaxvals[];
-  extern __shared__ float mystartmaxes[];
-  extern __shared__ float myendmaxes[];
+  extern __shared__ int mystartmaxes[];
+  extern __shared__ int myendmaxes[];
 		
 		int perstart = threadIdx.x + blockDim.x * blockIdx.x;
 		int perlen, perend;
@@ -93,6 +88,8 @@ __global__ void parallel_max_each_chunk(float *dmaxarr, float * darr, int n,int 
 									}
 									xbar /= (perend - perstart + 1);
 									mymaxvals[tid] = xbar;
+//									mystartmaxes[tid] = perstart;
+//									myendmaxes[tid] = perend;
 						} else {
         xbar = ( (perlen-1) * xbar + darr[perend] ) / perlen;
 						}
@@ -120,8 +117,29 @@ __global__ void parallel_max_each_chunk(float *dmaxarr, float * darr, int n,int 
      __syncthreads();
   }
   // the maximum among the mymaxvals in this block
-  if(tid == 0) {
+ if(tid == 0) {
   dmaxarr[blockIdx.x] = mymaxvals[0];
-  }
+  dmaxstart[blockIdx.x] = mystartmaxes[0];
+  dmaxend[blockIdx.x] = myendmaxes[0];
+		}
 }
 
+
+		//check the results
+
+void check(int n, int numBlock, float *smaxarr, float *maxarr, float *arr) {
+				bool judge = true;
+				for (int i=0; i < numBlock; i++) {
+						printf("max of block  %d,  %f %f\n ", i, smaxarr[i], maxarr[i]);
+						judge = judge && (smaxarr[i] == maxarr[i]);
+				}
+				printf("\n--------correct or wrong---------\n");
+				printf(judge ? "right\n": "wrong\n");
+
+				printf("\n--------1d array---------\n");
+    if ( n < 15) {
+				for (int i=0; i < n; i++) {
+						printf("element  %d,  %f\n ", i, arr[i]);
+				}
+    }
+}

@@ -1,9 +1,12 @@
-// n should be less than 10000 when k==3
+//When you set the numthreadsBlock = 64 or smaller, you can not get the corret answer; still the index is not correct
+// when testing the code, k should be an odd number because k is assumed to be odd when computing the truth
 #include <stdio.h>
 #include <cuda.h>
 
-__global__ void parallel_max_each_chunk(float *dmaxarr, float * darr,  int n, int k);
+__global__ void parallel_max_each_chunk(float *dmaxarr, int *dmaxstart, int *dmaxend, float * darr,  int n, int k);
 
+
+void find_max_from_blocks(float *maxarr, int *maxstart, int *maxend, int numBlock,int *startend, float *bigmax);
 
 int main(int argc, char **argv) {
 				int n = atoi(argv[1]);
@@ -16,30 +19,39 @@ int main(int argc, char **argv) {
 							arr[n-i] = (float)i;			
 				}
 
-		const int numthreadsBlock = 1024;
+		const int numthreadsBlock = 512;
 		int numChunk;
 		numChunk = ( n + numthreadsBlock - 1)/numthreadsBlock;
 		float *maxarr = (float *)malloc(numChunk * sizeof(float));
-
-  int numBlock = numChunk;
+  int *maxstart = (int *)malloc(numChunk * sizeof(int));
+  int *maxend = (int *)malloc(numChunk * sizeof(int));
+  
+		int numBlock = numChunk;
 
 		// declare GPU memory pointers
 		float *darr, * dmaxarr;
+		int *dmaxstart, *dmaxend;
 		cudaMalloc((void **)&darr, n*sizeof(float));
 		cudaMalloc((void **)&dmaxarr, numChunk*sizeof(float));
+		cudaMalloc((void **)&dmaxstart, numChunk*sizeof(int));
+		cudaMalloc((void **)&dmaxend, numChunk*sizeof(int));
+
 		cudaMemcpy(darr, arr, n*sizeof(float), cudaMemcpyHostToDevice);
+
 
 		dim3 dimGrid(numBlock,1);
 		dim3 dimBlock(numthreadsBlock,1,1);
 
-		parallel_max_each_chunk<<<dimGrid,dimBlock,(n+3*numthreadsBlock)*sizeof(float)>>>(dmaxarr, darr, n, k);
+		parallel_max_each_chunk<<<dimGrid,dimBlock,(3*numthreadsBlock)*sizeof(float)>>>(dmaxarr,dmaxstart,dmaxend, darr, n, k);
 		cudaThreadSynchronize();
 		cudaMemcpy(maxarr, dmaxarr, numChunk*sizeof(float), cudaMemcpyDeviceToHost);
+		cudaMemcpy(maxstart, dmaxstart, numChunk*sizeof(int), cudaMemcpyDeviceToHost);
+		cudaMemcpy(maxend, dmaxend, numChunk*sizeof(int), cudaMemcpyDeviceToHost);
 
-  //truth
+		//truth
 				float *smaxarr = (float *)malloc(numChunk*sizeof(float));
 				for (i = 0; i < numChunk; i ++) {
-        smaxarr[i] = i*numthreadsBlock + k/2 <=n? arr[i*numthreadsBlock + k/2 ]:0; // k is an odd number
+        smaxarr[i] = (i)*numthreadsBlock +k  <=n? arr[i*numthreadsBlock + k/2 ]:0; // k is an odd number
 				}
 
 		//check the results
@@ -68,29 +80,23 @@ int main(int argc, char **argv) {
 		//free gpu memory
 		cudaFree(dmaxarr);
 		cudaFree(darr);
+  int startend[2];
+		float bigmax;
+
+  find_max_from_blocks( maxarr, maxstart, maxend,  numBlock,startend, &bigmax);
+  printf("burst start from %d end at %d; max-mean is %f\n", startend[0], startend[1], bigmax);
 		return 0;
 }
 
-__global__ void parallel_max_each_chunk(float *dmaxarr, float * darr, int n,int k) {
- 	int i, tid = threadIdx.x;
-		//copy the whole series to shared memory
-  //always round up and if n is a multiple of blockDim.x no rounding
-		int chunkSize = (n+blockDim.x-1)/blockDim.x;
-  extern __shared__ float sdata[];
-  for (i = 0; i < chunkSize; i++) {
-			  if (tid * chunkSize + i <n)
-     sdata[tid*chunkSize + i ] = darr[tid*chunkSize + i];
-			}
-  __syncthreads();
+__global__ void parallel_max_each_chunk(float *dmaxarr, float *dmaxstart, float *dmaxend, float * darr, int n,int k) {
 
   // declare three array for the maximum found by each thread 
   extern __shared__ float mymaxvals[];
-  extern __shared__ float mystartmaxes[];
-  extern __shared__ float myendmaxes[];
 		
 		int perstart = threadIdx.x + blockDim.x * blockIdx.x;
 		int perlen, perend;
 		double xbar; // a temporay variable used when computing mean of subsequence
+ 	int i, tid = threadIdx.x;
 
 		if (perstart <= n-k) {
     for (perlen = k ; perlen <= n - perstart ; perlen++) {
@@ -99,40 +105,54 @@ __global__ void parallel_max_each_chunk(float *dmaxarr, float * darr, int n,int 
       if (perlen ==k) {
 							  xbar = 0;
 									for ( i = perstart; i <= perend; i++) {
-           xbar += sdata[i];     
+           xbar += darr[i];     
 									}
 									xbar /= (perend - perstart + 1);
 									mymaxvals[tid] = xbar;
+									mymaxvals[tid+blockDim.x] = perstart;
+									mymaxvals[tid+blockDim.x*2] = perlen;
 						} else {
-        xbar = ( (perlen-1) * xbar + sdata[perend] ) / perlen;
+        xbar = ( (perlen-1) * xbar + darr[perend] ) / perlen;
 						}
-						//update the mymaxvals[tid] if the next longer subsequence has a higher mean
-						if (xbar > mymaxvals[tid]) {
+						//update the mymaxvals[tid] if the next subsequence in a thread has a higher mean
+						if (xbar >  mymaxvals[tid]) {
          mymaxvals[tid] = xbar;
-									mystartmaxes[tid] = perstart;
-									myendmaxes[tid] = perend;
+									mymaxvals[tid+blockDim.x] = perstart;
+									mymaxvals[tid+blockDim.x*2] = perlen;
 						}
 				}
 		} else {
-    mymaxvals[tid] = 0;//initialize it the smallest number
+    mymaxvals[tid] = 0;//initialize it with the smallest number
 		}
-//  mymaxvals[tid] = sdata[tid]; 
 		__syncthreads(); //sync to make sure each thread in this block has done with the for loop
 
-  // get the highest among the mymaxvals using reduce
-  for (int s = blockDim.x/2; s > 0; s>>=1) {
+//  // get the highest among the mymaxvals using reduce
+    for (int s = blockDim.x/2; s > 0; s>>=1) {
      if (tid < s ) {
        if(mymaxvals[tid+s] > mymaxvals[tid]) {
 						   	mymaxvals[tid] = 	mymaxvals[tid+s]; 
-          mystartmaxes[tid] = mystartmaxes[tid + s];
-									 myendmaxes[tid] = myendmaxes[tid + s];	
+          mymaxvals[tid+blockDim.x] =  mymaxvals[tid+blockDim.x +s ];
+          mymaxvals[tid+blockDim.x*2] =  mymaxvals[tid+blockDim.x*2 +s ];
 							}	
      }
      __syncthreads();
   }
   // the maximum among the mymaxvals in this block
-  if(tid == 0) {
+ if(tid == 0) {
   dmaxarr[blockIdx.x] = mymaxvals[0];
+		dmaxstart[blockIdx.x] =  mystartmaxes[100];
+		dmaxend[blockIdx.x] =  myendmaxes[200];
   }
 }
 
+
+void find_max_from_blocks(float *maxarr, int *maxstart, int *maxend, int numBlock,int *startend, float *bigmax) {
+	*bigmax = 0;
+	for (int i = 0; i < numBlock; i++) {
+   if (*bigmax < maxarr[i]) {
+      *bigmax = maxarr[i];
+      startend[0] = maxstart[i];
+     	startend[1] = maxend[i];
+			}	
+ }
+}
